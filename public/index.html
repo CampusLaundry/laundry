@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Log in</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-hero">
+      <div class="logo"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#2dd4bf"/><circle cx="20" cy="21" r="10" fill="#0b3b4a"/><path d="M12 22c3-3 5 3 8 0s5 3 8 0" stroke="#5eead4" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="31" cy="8" r="3" fill="#a5f3fc"/><circle cx="35" cy="14" r="1.8" fill="#a5f3fc"/></svg></div>
+      <h1>Campus Laundry</h1>
+      <p>Book a washer or dryer, get told when your laundry is done, and skip the queue.</p>
+      <ul class="auth-points">
+        <li><span>📅</span>Book a machine for a time slot, up to 7 days ahead</li>
+        <li><span>🔔</span>A reminder before your slot and a message when it's done</li>
+        <li><span>⏳</span>Join the waiting list when everything is taken</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="auth-tabs">
+        <button id="tab-login" class="active">Log in</button>
+        <button id="tab-register">Register</button>
+      </div>
+
+      <form id="login-form">
+        <label for="login-email">Email or student number</label>
+        <input type="text" id="login-email" required autocomplete="username">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" required autocomplete="current-password">
+        <p class="error" id="login-error"></p>
+        <button type="submit" style="width: 100%">Log in</button>
+      </form>
+
+      <form id="register-form" class="hidden">
+        <label for="reg-name">Full name</label>
+        <input type="text" id="reg-name" required maxlength="100" autocomplete="name">
+        <div class="grid-2">
+          <div>
+            <label for="reg-number">Student number</label>
+            <input type="text" id="reg-number" required inputmode="numeric" pattern="[0-9]{8,10}" maxlength="10" placeholder="8–10 digits">
+          </div>
+          <div>
+            <label for="reg-email">Email</label>
+            <input type="email" id="reg-email" required autocomplete="email">
+          </div>
+        </div>
+        <label for="reg-password">Password <span class="muted small">(at least 8 characters)</span></label>
+        <input type="password" id="reg-password" required minlength="8" autocomplete="new-password">
+        <div class="grid-2">
+          <div>
+            <label for="reg-area">Your laundry room <span class="muted small">(optional)</span></label>
+            <select id="reg-area"></select>
+          </div>
+          <div>
+            <label for="reg-phone">Phone <span class="muted small">(optional)</span></label>
+            <input type="tel" id="reg-phone" maxlength="20" autocomplete="tel">
+          </div>
+        </div>
+        <p class="hint">Your laundry room is opened first when you book. Administrators are set up separately.</p>
+        <p class="error" id="register-error"></p>
+        <button type="submit" style="width: 100%">Create account</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/common.js"></script>
+  <script>
+    // Already logged in? Go straight in.
+    api('/api/auth/me').then((user) => { location.href = homeFor(user); }).catch(() => {});
+
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    function showTab(register) {
+      loginForm.classList.toggle('hidden', register);
+      registerForm.classList.toggle('hidden', !register);
+      document.getElementById('tab-login').classList.toggle('active', !register);
+      document.getElementById('tab-register').classList.toggle('active', register);
+    }
+    document.getElementById('tab-login').onclick = () => showTab(false);
+    document.getElementById('tab-register').onclick = () => showTab(true);
+
+    api('/api/rooms').then((rooms) => {
+      document.getElementById('reg-area').innerHTML = optionsHtml(rooms, null, 'Choose your laundry room…');
+    }).catch(() => {});
+
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('login-error');
+      errorEl.textContent = '';
+      try {
+        const user = await api('/api/auth/login', { method: 'POST', body: {
+          email: document.getElementById('login-email').value,
+          password: document.getElementById('login-password').value,
+        } });
+        location.href = homeFor(user);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    };
+
+    registerForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('register-error');
+      errorEl.textContent = '';
+      try {
+        const user = await api('/api/auth/register', { method: 'POST', body: {
+          fullName: document.getElementById('reg-name').value,
+          email: document.getElementById('reg-email').value,
+          studentNumber: document.getElementById('reg-number').value,
+          password: document.getElementById('reg-password').value,
+          roomId: document.getElementById('reg-area').value,
+          phone: document.getElementById('reg-phone').value,
+        } });
+        location.href = homeFor(user);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    };
+  </script>
+</body>
+</html>

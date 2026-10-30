@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · People</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main>
+    <h1>People</h1>
+    <p class="muted">Students register themselves. Make another administrator, deactivate accounts or reset passwords here.</p>
+
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <!-- People -->
+    <section data-panel="users">
+      <div class="card row">
+        <input type="search" id="user-search" placeholder="Search by name, email or student number" style="flex: 2; min-width: 200px">
+        <select id="user-role" style="flex: 1; min-width: 150px">
+          <option value="">All roles</option><option value="student">Students</option><option value="admin">Administrators</option>
+        </select>
+      </div>
+      <p class="hint" style="margin: -4px 0 10px">Deactivating a student cancels their upcoming bookings so others can use the slots. Their history stays.</p>
+      <div id="users"></div>
+    </section>
+
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let me;
+    const errorEl = document.getElementById('error');
+    const banner = document.getElementById('banner');
+
+    function say(html) { banner.innerHTML = html; }
+    async function run(fn) {
+      errorEl.textContent = '';
+      banner.innerHTML = '';
+      try { await fn(); } catch (err) { errorEl.textContent = err.message; }
+    }
+
+
+    // ---------------------------------------------------------------- people
+    async function loadUsers() {
+      const q = new URLSearchParams();
+      if (document.getElementById('user-search').value) q.set('search', document.getElementById('user-search').value);
+      if (document.getElementById('user-role').value) q.set('role', document.getElementById('user-role').value);
+      const users = await api(`/api/admin/users?${q}`);
+      document.getElementById('users').innerHTML = users.length ? users.map((u) => {
+        const self = u.id === me.id;
+        return `
+        <div class="card" data-user="${u.id}" data-email="${esc(u.email)}">
+          <div class="spread">
+            <div>
+              <strong>${esc(u.full_name)}</strong>${self ? ' <span class="muted small">(you)</span>' : ''}
+              ${u.is_active ? '' : ' <span class="badge s-no_show">Deactivated</span>'}
+              ${u.must_change_password ? ' <span class="badge s-in_progress">Temporary password</span>' : ''}
+              <div class="meta">${esc(u.email)}${u.student_number ? ` · ${esc(u.student_number)}` : ''}${u.phone ? ` · ${esc(u.phone)}` : ''} · ${u.room ? esc(u.room) : 'no home room'}
+                · ${u.washes} load${u.washes === 1 ? '' : 's'} · ${u.no_shows} missed
+                · joined ${formatDate(u.created_at)}</div>
+            </div>
+            <div class="row">
+              <select data-role ${self ? 'disabled' : ''}>
+                ${['student', 'admin'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}
+              </select>
+              ${self ? '' : `<button class="small secondary" data-active="${u.is_active ? 0 : 1}">${u.is_active ? 'Deactivate' : 'Reactivate'}</button>`}
+              <button class="small secondary" data-reset>Reset password</button>
+              ${self ? '' : '<button class="small danger" data-delete>Delete</button>'}
+            </div>
+          </div>
+        </div>`;
+      }).join('') : '<div class="card empty">No people match.</div>';
+    }
+
+    let searchTimer;
+    document.getElementById('user-search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => run(loadUsers), 300); };
+    document.getElementById('user-role').onchange = () => run(loadUsers);
+
+    const usersEl = document.getElementById('users');
+    usersEl.addEventListener('change', (e) => run(async () => {
+      if (!e.target.matches('[data-role]')) return;
+      const card = e.target.closest('[data-user]');
+      const name = card.querySelector('strong').textContent;
+      await api(`/api/admin/users/${card.dataset.user}`, { method: 'PATCH', body: { role: e.target.value } });
+      say(`<div class="success">${esc(name)} is now ${e.target.value === 'admin' ? 'an administrator' : `a ${e.target.value}`}.</div>`);
+      await loadUsers();
+    }));
+    usersEl.addEventListener('click', (e) => run(async () => {
+      const card = e.target.closest('[data-user]');
+      if (!card) return;
+      const userId = card.dataset.user;
+      const name = card.querySelector('strong').textContent;
+      if (e.target.matches('[data-active]')) {
+        const activate = e.target.dataset.active === '1';
+        if (!activate && !confirm(`Deactivate ${name}? They won't be able to log in, but their records stay.`)) return;
+        await api(`/api/admin/users/${userId}`, { method: 'PATCH', body: { isActive: activate } });
+        await loadUsers();
+      }
+      if (e.target.matches('[data-reset]')) {
+        if (!confirm(`Give ${name} a new temporary password? Their current password will stop working.`)) return;
+        const { tempPassword } = await api(`/api/admin/users/${userId}/reset-password`, { method: 'POST' });
+        await loadUsers();
+        say(tempPasswordNotice(name, card.dataset.email, tempPassword));
+      }
+      if (e.target.matches('[data-delete]')) {
+        if (!confirm(`Delete ${name}'s account?\n\nTheir past bookings and feedback stay (shown as "former student"); their upcoming bookings are cancelled. This can't be undone. Consider deactivating instead.`)) return;
+        await api(`/api/admin/users/${userId}`, { method: 'DELETE' });
+        say(`<div class="success">${esc(name)}'s account was deleted.</div>`);
+        await loadUsers();
+      }
+    }));
+
+    async function init() {
+      me = await requireUser('admin');
+      await run(async () => {
+        await loadUsers();
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

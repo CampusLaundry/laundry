@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Book a machine</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main>
+    <div class="page-head">
+      <div>
+        <h1 id="page-title">Book a machine</h1>
+        <p class="muted" style="margin: 0" id="intro">Choose a laundry room and a day, then click a free slot.</p>
+      </div>
+      <select id="room" style="width: auto; min-width: 220px"></select>
+    </div>
+    <div id="banner"></div>
+    <div class="notice hidden" id="reschedule-notice"></div>
+    <p class="error" id="error"></p>
+
+    <div class="card">
+      <div class="day-chips" id="days"></div>
+    </div>
+
+    <div class="card">
+      <div class="spread" style="margin-bottom: 10px">
+        <div>
+          <h3 id="grid-title"></h3>
+          <p class="muted small" id="room-info" style="margin: 2px 0 0"></p>
+        </div>
+        <div class="legend">
+          <span style="--c: var(--good-soft)">Free</span>
+          <span style="--c: var(--primary)">Yours</span>
+          <span style="--c: #e3ecef">Taken</span>
+          <span style="--c: #fdeaea">Out of order</span>
+        </div>
+      </div>
+      <div class="grid-wrap" id="grid"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card" id="waitlist-card">
+      <h3>Nothing free?</h3>
+      <p class="muted small" style="margin: 4px 0 10px">Join the waiting list for this room and day. If someone cancels or misses their slot, the first student in line gets a notification.</p>
+      <div class="row" id="waitlist"></div>
+    </div>
+
+    <div class="confirm-bar hidden" id="confirm">
+      <div id="confirm-text"></div>
+      <div class="row">
+        <button class="accent" id="confirm-yes">Confirm booking</button>
+        <button class="secondary" id="confirm-no">Cancel</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let user;
+    let rooms = [];
+    let data;
+    let selected = null;
+    let day = param('date') || todayInput();
+    const rescheduleId = param('reschedule');
+    let rescheduling = null;
+
+    function renderDays() {
+      const chips = [];
+      for (let i = 0; i <= 7; i++) {
+        const d = todayInput(i);
+        chips.push(`<button class="day-chip ${d === day ? 'on' : ''}" data-day="${d}">
+          ${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : formatDay(d, { weekday: 'short' })}
+          <strong>${formatDay(d, { day: 'numeric', month: 'short' })}</strong></button>`);
+      }
+      document.getElementById('days').innerHTML = chips.join('');
+    }
+
+    function cellHtml(m, c) {
+      const sel = selected && selected.machine.id === m.id && selected.start === c.start ? 'selected' : '';
+      const label = { free: 'Book', mine: c.status === 'booked' ? 'Yours' : 'Yours ✓', taken: user.role === 'admin' && c.student ? esc(c.student.split(' ')[0]) : 'Taken', past: '', out_of_order: 'Out' }[c.state];
+      if (c.state === 'free' && data.bookable) return `<button class="cell free ${sel}" data-machine="${m.id}" data-start="${c.start}">${label}</button>`;
+      if (c.state === 'mine') return `<a class="cell mine" href="bookings.html" style="display: grid; place-items: center; text-decoration: none">${label}</a>`;
+      return `<span class="cell ${c.state === 'free' ? 'past' : c.state}" style="display: grid; place-items: center" title="${c.state === 'taken' ? 'Booked' : ''}">${label}</span>`;
+    }
+
+    function renderGrid() {
+      const r = data.room;
+      document.getElementById('grid-title').textContent = `${r.name} · ${dayLabel(data.date)}`;
+      document.getElementById('room-info').textContent =
+        `${r.location ? r.location + ' · ' : ''}Open ${hhmm(r.opens_at)}–${hhmm(r.closes_at)} · ${r.slot_minutes}-minute slots${r.is_active ? '' : ' · CLOSED for bookings'}`;
+      if (!data.machines.length) {
+        document.getElementById('grid').innerHTML = '<p class="empty">This room has no machines yet.</p>';
+        return;
+      }
+      document.getElementById('grid').innerHTML = `<table class="slots">
+        <tr><th></th>${data.slots.map((s) => `<th class="time">${hhmm(s.start)}</th>`).join('')}</tr>
+        ${data.machines.map((m) => `<tr>
+          <th class="machine">${kindBadge(m.kind)} <strong>${esc(m.code)}</strong>
+            <div class="muted small" style="font-weight: normal">${m.out_of_order ? `<span style="color: var(--bad)">Out of order: ${esc(m.outage_reason)}</span>` : `${m.cycle_minutes}-minute cycle`}</div></th>
+          ${m.cells.map((c) => `<td>${cellHtml(m, c)}</td>`).join('')}
+        </tr>`).join('')}
+      </table>`;
+    }
+
+    function renderWaitlist() {
+      const card = document.getElementById('waitlist-card');
+      if (!data.bookable) { card.classList.add('hidden'); return; }
+      card.classList.remove('hidden');
+      const freeOf = (kind) => data.machines.some((m) => m.kind === kind && m.cells.some((c) => c.state === 'free'));
+      const parts = ['washer', 'dryer'].filter((k) => data.machines.some((m) => m.kind === k)).map((kind) => {
+        const entry = data.waitlist.find((w) => w.kind === kind);
+        if (entry) {
+          return `<span class="badge s-booked">✓ On the waiting list for a ${kind}${entry.notified_at ? ' (notified)' : ''}</span>
+            <button class="small secondary" data-leave="${entry.id}">Leave</button>`;
+        }
+        return freeOf(kind)
+          ? `<span class="muted small">${kind[0].toUpperCase() + kind.slice(1)}s still have free slots.</span>`
+          : `<button class="small" data-join="${kind}">Join the waiting list for a ${kind}</button>`;
+      });
+      document.getElementById('waitlist').innerHTML = parts.join('<span style="width: 18px"></span>');
+    }
+
+    async function load() {
+      selected = null;
+      document.getElementById('confirm').classList.add('hidden');
+      const roomId = document.getElementById('room').value;
+      if (!roomId) {
+        document.getElementById('grid').innerHTML = '<p class="empty">No laundry rooms are open yet.</p>';
+        return;
+      }
+      try {
+        data = await api(`/api/rooms/${roomId}/availability?date=${day}`);
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+        return;
+      }
+      history.replaceState(null, '', `?room=${roomId}&date=${day}${rescheduleId ? `&reschedule=${rescheduleId}` : ''}`);
+      renderDays();
+      renderGrid();
+      renderWaitlist();
+    }
+
+    document.getElementById('days').onclick = (e) => {
+      const b = e.target.closest('[data-day]');
+      if (!b) return;
+      day = b.dataset.day;
+      document.getElementById('error').textContent = '';
+      load();
+    };
+    document.getElementById('room').onchange = () => { document.getElementById('error').textContent = ''; load(); };
+
+    document.getElementById('grid').onclick = (e) => {
+      const b = e.target.closest('button.cell.free');
+      if (!b) return;
+      const machine = data.machines.find((m) => m.id === Number(b.dataset.machine));
+      const slot = data.slots.find((s) => s.start === b.dataset.start);
+      selected = { machine, start: slot.start, end: slot.end };
+      renderGrid();
+      document.getElementById('confirm-text').innerHTML = `${rescheduling ? 'Move your booking to' : 'Book'} <strong>${machine.kind} ${esc(machine.code)}</strong>
+        in ${esc(data.room.name)}, <strong>${dayLabel(data.date)} ${hhmm(slot.start)}–${hhmm(slot.end)}</strong>
+        <span class="muted small">(${machine.cycle_minutes}-minute cycle)</span>`;
+      document.getElementById('confirm-yes').textContent = rescheduling ? 'Move booking' : 'Confirm booking';
+      document.getElementById('confirm').classList.remove('hidden');
+    };
+    document.getElementById('confirm-no').onclick = () => { selected = null; document.getElementById('confirm').classList.add('hidden'); renderGrid(); };
+    document.getElementById('confirm-yes').onclick = async (e) => {
+      e.target.disabled = true;
+      const body = { machineId: selected.machine.id, date: data.date, slotStart: selected.start };
+      try {
+        if (rescheduling) {
+          await api(`/api/bookings/${rescheduling.id}`, { method: 'PUT', body });
+          location.href = 'bookings.html?moved=1';
+        } else {
+          await api('/api/bookings', { method: 'POST', body });
+          location.href = user.role === 'admin' ? `book.html?room=${data.room.id}&date=${data.date}` : 'bookings.html?booked=1';
+        }
+      } catch (err) {
+        e.target.disabled = false;
+        await load(); // the slot may have just been taken
+        document.getElementById('error').textContent = err.message;
+        scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+
+    document.getElementById('waitlist').onclick = async (e) => {
+      document.getElementById('error').textContent = '';
+      try {
+        if (e.target.dataset.join) {
+          await api('/api/waitlist', { method: 'POST', body: { roomId: data.room.id, date: data.date, kind: e.target.dataset.join } });
+          flash(`You're on the waiting list. We'll notify you if a ${e.target.dataset.join} becomes free.`);
+        }
+        if (e.target.dataset.leave) await api(`/api/waitlist/${e.target.dataset.leave}`, { method: 'DELETE' });
+        await load();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    };
+
+    async function init() {
+      user = await requireUser();
+      rooms = await api('/api/rooms');
+      if (rescheduleId) {
+        try {
+          rescheduling = await api(`/api/bookings/${rescheduleId}`);
+          document.getElementById('page-title').textContent = 'Reschedule your booking';
+          document.getElementById('reschedule-notice').innerHTML = `Current booking: <strong>${rescheduling.kind} ${esc(rescheduling.code)}</strong>
+            in ${esc(rescheduling.room)}, ${dayLabel(rescheduling.booking_date)} ${hhmm(rescheduling.slot_start)}. Click a free slot to move it.
+            <a href="book.html">Cancel rescheduling</a>`;
+          document.getElementById('reschedule-notice').classList.remove('hidden');
+          if (!param('date')) day = rescheduling.booking_date;
+        } catch (err) {
+          document.getElementById('error').textContent = err.message;
+        }
+      }
+      const preferred = Number(param('room')) || (rescheduling && rescheduling.room_id) || user.roomId;
+      document.getElementById('room').innerHTML = optionsHtml(rooms, preferred, rooms.length ? null : 'No rooms yet',
+        (r) => `${r.name} (${r.washers} washer${r.washers === 1 ? '' : 's'}, ${r.dryers} dryer${r.dryers === 1 ? '' : 's'})`);
+      renderDays();
+      await load();
+    }
+
+    init();
+  </script>
+</body>
+</html>

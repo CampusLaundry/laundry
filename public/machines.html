@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Machines and rooms</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main>
+    <h1>Machines and rooms</h1>
+    <p class="muted">Add, edit or remove washers and dryers, mark them out of order, and set up the laundry rooms and their opening hours.</p>
+    <div class="tabs">
+      <button data-tab="machines" class="active">Machines</button>
+      <button data-tab="rooms">Laundry rooms</button>
+    </div>
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <!-- Machines -->
+    <section data-panel="machines">
+      <form class="card" id="machine-form">
+        <h3 id="machine-form-title">Add a machine</h3>
+        <div class="grid-3" style="grid-template-columns: 2fr 1fr 1fr 1fr">
+          <div><label for="m-room">Laundry room</label><select id="m-room" required></select></div>
+          <div><label for="m-code">Code</label><input type="text" id="m-code" required maxlength="20" placeholder="e.g. W1"></div>
+          <div><label for="m-kind">Type</label><select id="m-kind"><option value="washer">Washer</option><option value="dryer">Dryer</option></select></div>
+          <div><label for="m-cycle">Cycle (minutes)</label><input type="number" id="m-cycle" required min="10" max="240" value="45"></div>
+        </div>
+        <p class="error" id="machine-error"></p>
+        <div class="row" style="margin-top: 8px">
+          <button type="submit" id="machine-save">Add machine</button>
+          <button type="button" class="secondary hidden" id="machine-cancel">Cancel editing</button>
+        </div>
+      </form>
+      <div class="card row">
+        <select id="room-filter" style="width: auto; min-width: 200px"></select>
+        <label class="inline"><input type="checkbox" id="show-retired"> Show retired machines</label>
+      </div>
+      <div class="card table-wrap" id="machines"></div>
+    </section>
+
+    <!-- Rooms -->
+    <section data-panel="rooms" class="hidden">
+      <form class="card" id="room-form">
+        <h3 id="room-form-title">Add a laundry room</h3>
+        <div class="grid-2">
+          <div><label for="r-name">Name</label><input type="text" id="r-name" required maxlength="100" placeholder="e.g. Residence A laundry"></div>
+          <div><label for="r-location">Location <span class="muted small">(optional)</span></label><input type="text" id="r-location" maxlength="200" placeholder="e.g. Ground floor, Block A"></div>
+        </div>
+        <div class="grid-3">
+          <div><label for="r-opens">Opens</label><input type="time" id="r-opens" required value="06:00"></div>
+          <div><label for="r-closes">Closes</label><input type="time" id="r-closes" required value="22:00"></div>
+          <div><label for="r-slot">Slot length (minutes)</label><input type="number" id="r-slot" required min="30" max="240" value="60"></div>
+        </div>
+        <label class="inline" style="margin-top: 12px"><input type="checkbox" id="r-active" checked> Open for bookings</label>
+        <p class="error" id="room-error"></p>
+        <div class="row" style="margin-top: 8px">
+          <button type="submit" id="room-save">Add room</button>
+          <button type="button" class="secondary hidden" id="room-cancel">Cancel editing</button>
+        </div>
+      </form>
+      <div class="card table-wrap" id="rooms"></div>
+    </section>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let rooms = [];
+    let machines = [];
+    let editingMachine = null;
+    let editingRoom = null;
+    const errorEl = document.getElementById('error');
+
+    async function run(fn) {
+      errorEl.textContent = '';
+      try { await fn(); } catch (err) { errorEl.textContent = err.message; }
+    }
+
+    document.querySelector('.tabs').onclick = (e) => {
+      const b = e.target.closest('[data-tab]');
+      if (!b) return;
+      document.querySelectorAll('[data-tab]').forEach((t) => t.classList.toggle('active', t === b));
+      document.querySelectorAll('[data-panel]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== b.dataset.tab));
+    };
+
+    // ---------------------------------------------------------------- machines
+    async function loadMachines() {
+      const q = new URLSearchParams();
+      if (document.getElementById('room-filter').value) q.set('roomId', document.getElementById('room-filter').value);
+      if (document.getElementById('show-retired').checked) q.set('all', '1');
+      machines = await api(`/api/machines?${q}`);
+      document.getElementById('machines').innerHTML = machines.length ? `<table>
+        <tr><th>Machine</th><th>Room</th><th>Cycle</th><th>Status</th><th>Upcoming</th><th>Rating</th><th></th></tr>
+        ${machines.map((m) => `<tr data-id="${m.id}">
+          <td>${kindBadge(m.kind)} <strong>${esc(m.code)}</strong></td>
+          <td>${esc(m.room)}</td><td>${m.cycle_minutes} min</td>
+          <td>${!m.is_active ? '<span class="badge s-cancelled">Retired</span>'
+            : m.out_of_order ? `<span class="badge s-out">Out of order</span><div class="muted small">${esc(m.outage_reason)} · since ${formatDate(m.outage_since)}</div>`
+              : '<span class="badge s-free">Available</span>'}</td>
+          <td>${m.upcoming}</td><td>${m.avg_rating ? `${m.avg_rating} ★` : '–'}</td>
+          <td style="text-align: right; white-space: nowrap">
+            ${m.is_active ? `<button class="small secondary" data-edit>Edit</button>
+              ${m.out_of_order ? '<button class="small" data-repair>Back in service</button>' : '<button class="small danger" data-outage>Out of order</button>'}
+              <button class="small secondary" data-retire>Retire</button>` : '<button class="small secondary" data-reactivate>Bring back</button>'}
+            <button class="small secondary" data-history title="Outage history">History</button>
+            <button class="small danger" data-delete>Delete</button>
+          </td></tr>`).join('')}
+      </table>` : '<p class="empty">No machines yet. Add the washers and dryers above.</p>';
+    }
+
+    function resetMachineForm() {
+      editingMachine = null;
+      document.getElementById('machine-form').reset();
+      document.getElementById('m-room').value = document.getElementById('room-filter').value || (rooms[0] && rooms[0].id) || '';
+      document.getElementById('machine-form-title').textContent = 'Add a machine';
+      document.getElementById('machine-save').textContent = 'Add machine';
+      document.getElementById('machine-cancel').classList.add('hidden');
+    }
+
+    document.getElementById('machine-form').onsubmit = (e) => run(async () => {
+      e.preventDefault();
+      const body = {
+        roomId: document.getElementById('m-room').value, code: document.getElementById('m-code').value,
+        kind: document.getElementById('m-kind').value, cycleMinutes: document.getElementById('m-cycle').value,
+      };
+      try {
+        await api(editingMachine ? `/api/machines/${editingMachine}` : '/api/machines', { method: editingMachine ? 'PUT' : 'POST', body });
+      } catch (err) {
+        document.getElementById('machine-error').textContent = err.message;
+        return;
+      }
+      document.getElementById('machine-error').textContent = '';
+      flash(editingMachine ? 'Machine saved.' : `${body.code.toUpperCase()} added.`);
+      resetMachineForm();
+      await loadAll();
+    });
+    document.getElementById('machine-cancel').onclick = resetMachineForm;
+    document.getElementById('room-filter').onchange = () => run(loadMachines);
+    document.getElementById('show-retired').onchange = () => run(loadMachines);
+
+    document.getElementById('machines').addEventListener('click', (e) => run(async () => {
+      const row = e.target.closest('[data-id]');
+      if (!row) return;
+      const m = machines.find((x) => x.id === Number(row.dataset.id));
+      if (e.target.matches('[data-edit]')) {
+        editingMachine = m.id;
+        document.getElementById('m-room').value = m.room_id;
+        document.getElementById('m-code').value = m.code;
+        document.getElementById('m-kind').value = m.kind;
+        document.getElementById('m-cycle').value = m.cycle_minutes;
+        document.getElementById('machine-form-title').textContent = `Edit ${m.code}`;
+        document.getElementById('machine-save').textContent = 'Save changes';
+        document.getElementById('machine-cancel').classList.remove('hidden');
+        scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (e.target.matches('[data-outage]')) {
+        const reason = prompt(`Why is ${m.code} out of order? Students with upcoming bookings on it will see this.`, 'Not draining, waiting for repair');
+        if (!reason) return;
+        const { cancelled } = await api(`/api/machines/${m.id}/outage`, { method: 'POST', body: { reason } });
+        flash(`${m.code} is out of order. ${cancelled} upcoming booking${cancelled === 1 ? ' was' : 's were'} cancelled and the students notified.`);
+      }
+      if (e.target.matches('[data-repair]')) {
+        await api(`/api/machines/${m.id}/repair`, { method: 'POST' });
+        flash(`${m.code} is back in service and can be booked again.`);
+      }
+      if (e.target.matches('[data-retire]')) {
+        if (!confirm(`Retire ${m.code}? It can no longer be booked; its ${m.upcoming} upcoming booking(s) will be cancelled. Its history stays.`)) return;
+        await api(`/api/machines/${m.id}`, { method: 'PATCH', body: { isActive: false } });
+      }
+      if (e.target.matches('[data-reactivate]')) await api(`/api/machines/${m.id}`, { method: 'PATCH', body: { isActive: true } });
+      if (e.target.matches('[data-delete]')) {
+        if (!confirm(`Delete ${m.code} permanently?`)) return;
+        await api(`/api/machines/${m.id}`, { method: 'DELETE' });
+      }
+      if (e.target.matches('[data-history]')) {
+        const outages = await api(`/api/machines/${m.id}/outages`);
+        alert(outages.length ? `${m.code} outages:\n\n${outages.map((o) => `• ${formatDate(o.started_at)} – ${o.ended_at ? formatDate(o.ended_at) : 'now'}: ${o.reason}`).join('\n')}` : `${m.code} has never been out of order.`);
+        return;
+      }
+      await loadAll();
+    }));
+
+    // ---------------------------------------------------------------- rooms
+    function renderRooms() {
+      document.getElementById('rooms').innerHTML = rooms.length ? `<table>
+        <tr><th>Room</th><th>Hours</th><th>Slots</th><th>Machines</th><th>Status</th><th></th></tr>
+        ${rooms.map((r) => `<tr data-id="${r.id}">
+          <td><strong>${esc(r.name)}</strong><div class="muted small">${esc(r.location || '')}</div></td>
+          <td>${hhmm(r.opens_at)}–${hhmm(r.closes_at)}</td><td>${r.slot_minutes} min</td>
+          <td>${r.washers} washer${r.washers === 1 ? '' : 's'}, ${r.dryers} dryer${r.dryers === 1 ? '' : 's'}${r.out_of_order ? ` <span class="badge s-out">${r.out_of_order} out of order</span>` : ''}</td>
+          <td>${r.is_active ? '<span class="badge s-free">Open</span>' : '<span class="badge s-cancelled">Closed</span>'}</td>
+          <td style="text-align: right; white-space: nowrap"><button class="small secondary" data-edit>Edit</button> <button class="small danger" data-delete>Delete</button></td>
+        </tr>`).join('')}</table>` : '<p class="empty">No laundry rooms yet. Add the first one above.</p>';
+    }
+
+    function resetRoomForm() {
+      editingRoom = null;
+      document.getElementById('room-form').reset();
+      document.getElementById('room-form-title').textContent = 'Add a laundry room';
+      document.getElementById('room-save').textContent = 'Add room';
+      document.getElementById('room-cancel').classList.add('hidden');
+    }
+
+    document.getElementById('room-form').onsubmit = (e) => run(async () => {
+      e.preventDefault();
+      const body = {
+        name: document.getElementById('r-name').value, location: document.getElementById('r-location').value,
+        opensAt: document.getElementById('r-opens').value, closesAt: document.getElementById('r-closes').value,
+        slotMinutes: document.getElementById('r-slot').value, isActive: document.getElementById('r-active').checked,
+      };
+      try {
+        await api(editingRoom ? `/api/rooms/${editingRoom}` : '/api/rooms', { method: editingRoom ? 'PUT' : 'POST', body });
+      } catch (err) {
+        document.getElementById('room-error').textContent = err.message;
+        return;
+      }
+      document.getElementById('room-error').textContent = '';
+      flash('Laundry room saved.');
+      resetRoomForm();
+      await loadAll();
+    });
+    document.getElementById('room-cancel').onclick = resetRoomForm;
+
+    document.getElementById('rooms').addEventListener('click', (e) => run(async () => {
+      const row = e.target.closest('[data-id]');
+      if (!row) return;
+      const r = rooms.find((x) => x.id === Number(row.dataset.id));
+      if (e.target.matches('[data-edit]')) {
+        editingRoom = r.id;
+        document.getElementById('r-name').value = r.name;
+        document.getElementById('r-location').value = r.location || '';
+        document.getElementById('r-opens').value = hhmm(r.opens_at);
+        document.getElementById('r-closes').value = hhmm(r.closes_at);
+        document.getElementById('r-slot').value = r.slot_minutes;
+        document.getElementById('r-active').checked = r.is_active;
+        document.getElementById('room-form-title').textContent = `Edit ${r.name}`;
+        document.getElementById('room-save').textContent = 'Save changes';
+        document.getElementById('room-cancel').classList.remove('hidden');
+        scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      if (e.target.matches('[data-delete]')) {
+        if (!confirm(`Delete ${r.name}?`)) return;
+        await api(`/api/rooms/${r.id}`, { method: 'DELETE' });
+        await loadAll();
+      }
+    }));
+
+    async function loadAll() {
+      rooms = await api('/api/rooms?all=1');
+      const filter = document.getElementById('room-filter').value;
+      document.getElementById('room-filter').innerHTML = optionsHtml(rooms, filter, 'All rooms');
+      const formRoom = document.getElementById('m-room').value;
+      document.getElementById('m-room').innerHTML = optionsHtml(rooms, formRoom || (rooms[0] && rooms[0].id), rooms.length ? null : 'Add a room first');
+      renderRooms();
+      await loadMachines();
+    }
+
+    requireUser('admin').then(() => run(loadAll));
+  </script>
+</body>
+</html>

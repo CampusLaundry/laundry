@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Notifications</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main class="narrow">
+    <div class="page-head">
+      <div>
+        <h1>Notifications</h1>
+        <p class="muted" style="margin: 0">Reminders, "laundry done", free machines and replies to your feedback.</p>
+      </div>
+      <button class="secondary" id="read-all">Mark all as read</button>
+    </div>
+    <p class="error" id="error"></p>
+    <div id="list"><p class="muted">Loading…</p></div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    const ICON = { reminder: '⏰', cycle_done: '✅', machine_free: '🟢', booking_cancelled: '⚠️', no_show: '⌛', feedback_reply: '💬' };
+    const LINK = { reminder: 'bookings.html', cycle_done: 'bookings.html', machine_free: 'book.html', booking_cancelled: 'book.html', no_show: 'book.html', feedback_reply: 'feedback.html' };
+
+    async function load() {
+      try {
+        const { notifications } = await api('/api/notifications');
+        document.getElementById('list').innerHTML = notifications.length ? notifications.map((n) => `
+          <div class="card notification ${n.read_at ? '' : 'unread'}" data-id="${n.id}">
+            <div class="icon">${ICON[n.kind] || '🔔'}</div>
+            <div class="body">
+              <div>${esc(n.message)}</div>
+              <div class="muted small">${timeAgo(n.created_at)} · <a href="${LINK[n.kind]}" data-open>Open</a></div>
+            </div>
+            <div class="row">
+              ${n.read_at ? '' : '<button class="small secondary" data-read>Mark read</button>'}
+              <button class="link" data-delete title="Delete" style="color: var(--muted)">✕</button>
+            </div>
+          </div>`).join('') : '<div class="card empty">No notifications yet.</div>';
+        refreshBell();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    document.getElementById('list').addEventListener('click', async (e) => {
+      const card = e.target.closest('[data-id]');
+      if (!card) return;
+      const id = card.dataset.id;
+      if (e.target.matches('[data-open]')) {
+        e.preventDefault();
+        await api(`/api/notifications/${id}/read`, { method: 'POST' });
+        location.href = e.target.getAttribute('href');
+        return;
+      }
+      if (e.target.matches('[data-read]')) await api(`/api/notifications/${id}/read`, { method: 'POST' });
+      if (e.target.matches('[data-delete]')) await api(`/api/notifications/${id}`, { method: 'DELETE' });
+      load();
+    });
+    document.getElementById('read-all').onclick = async () => { await api('/api/notifications/read-all', { method: 'POST' }); load(); };
+
+    requireUser().then(() => { load(); setInterval(load, 30000); });
+  </script>
+</body>
+</html>

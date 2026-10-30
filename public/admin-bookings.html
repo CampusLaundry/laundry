@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Booking history</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main>
+    <h1>Booking history</h1>
+    <p class="muted">Every booking in every laundry room. Cancel a student's booking here if needed (they are notified).</p>
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <div class="card">
+      <div class="filters" style="grid-template-columns: 2fr 1fr 1fr 1fr 1fr">
+        <input type="search" id="search" placeholder="Student name, number or email">
+        <input type="date" id="from" title="From">
+        <input type="date" id="to" title="To">
+        <select id="room"></select>
+        <select id="status"></select>
+      </div>
+    </div>
+
+    <p class="muted small" id="count"></p>
+    <div class="card table-wrap" id="list"></div>
+    <div class="pager" id="pager"></div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let page = 1;
+
+    async function load() {
+      const q = new URLSearchParams();
+      for (const [id, key] of [['search', 'search'], ['from', 'from'], ['to', 'to'], ['room', 'roomId'], ['status', 'status']]) {
+        const v = document.getElementById(id).value;
+        if (v) q.set(key, v);
+      }
+      q.set('page', page);
+      try {
+        const data = await api(`/api/admin/bookings?${q}`);
+        document.getElementById('count').textContent = `${data.total} booking${data.total === 1 ? '' : 's'}`;
+        document.getElementById('list').innerHTML = data.bookings.length ? `<table>
+          <tr><th>Date and slot</th><th>Machine</th><th>Room</th><th>Student</th><th>Status</th><th>Started</th><th>Collected</th><th></th></tr>
+          ${data.bookings.map((b) => `<tr data-id="${b.id}">
+            <td>${formatDay(b.booking_date)} <strong>${hhmm(b.slot_start)}</strong>–${hhmm(b.slot_end)}</td>
+            <td>${kindBadge(b.kind)} ${esc(b.code)}</td><td>${esc(b.room)}</td>
+            <td>${esc(b.student || 'A former student')}${b.student_number ? `<div class="muted small">${esc(b.student_number)}</div>` : ''}</td>
+            <td>${bookingBadge(b.status)}</td>
+            <td class="small">${b.started_at ? hhmm(new Date(b.started_at).toTimeString()) : '–'}</td>
+            <td class="small">${b.collected_at ? hhmm(new Date(b.collected_at).toTimeString()) : '–'}</td>
+            <td>${b.status === 'booked' ? '<button class="small danger" data-cancel>Cancel</button>' : ''}</td>
+          </tr>`).join('')}</table>` : '<p class="empty">No bookings match.</p>';
+        document.getElementById('pager').innerHTML = data.pages > 1 ? `
+          <button class="secondary small" ${data.page <= 1 ? 'disabled' : ''} data-page="${data.page - 1}">← Previous</button>
+          <span class="muted small">Page ${data.page} of ${data.pages}</span>
+          <button class="secondary small" ${data.page >= data.pages ? 'disabled' : ''} data-page="${data.page + 1}">Next →</button>` : '';
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    function reload() { page = 1; load(); }
+
+    async function init() {
+      await requireUser('admin');
+      document.getElementById('status').innerHTML = '<option value="">All statuses</option>' +
+        Object.entries(BOOKING_STATUS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+      document.getElementById('room').innerHTML = optionsHtml(await api('/api/rooms?all=1'), null, 'All rooms');
+      for (const id of ['from', 'to', 'status']) if (param(id)) document.getElementById(id).value = param(id);
+      let timer;
+      document.getElementById('search').oninput = () => { clearTimeout(timer); timer = setTimeout(reload, 300); };
+      for (const id of ['from', 'to', 'room', 'status']) document.getElementById(id).onchange = reload;
+      document.getElementById('pager').onclick = (e) => { const b = e.target.closest('[data-page]'); if (b) { page = Number(b.dataset.page); load(); } };
+      document.getElementById('list').onclick = async (e) => {
+        if (!e.target.matches('[data-cancel]')) return;
+        if (!confirm('Cancel this booking? The student will be notified.')) return;
+        try {
+          await api(`/api/bookings/${e.target.closest('[data-id]').dataset.id}/cancel`, { method: 'POST' });
+          flash('Booking cancelled and the student notified.');
+          load();
+        } catch (err) {
+          document.getElementById('error').textContent = err.message;
+        }
+      };
+      load();
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main>
+    <div class="page-head">
+      <div>
+        <h1>Dashboard</h1>
+        <p class="muted" style="margin: 0">Today in the laundry rooms, and usage over the last <span id="days-label">30 days</span>.</p>
+      </div>
+      <div class="row">
+        <select id="days" style="width: auto">
+          <option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option>
+        </select>
+        <a class="button secondary" href="admin-bookings.html">Booking history</a>
+      </div>
+    </div>
+    <p class="error" id="error"></p>
+
+    <h2 style="margin-top: 0">Right now</h2>
+    <div class="stats" id="now"></div>
+    <h2>Usage report</h2>
+    <div class="stats" id="period"></div>
+
+    <div class="two-col" style="margin-top: 16px">
+      <div class="card">
+        <h3>Bookings per day</h3>
+        <p class="muted small" style="margin: 2px 0 10px">Last 14 days and the coming week</p>
+        <div class="bars" id="per-day"></div>
+      </div>
+      <div class="card">
+        <h3>Busiest hours</h3>
+        <p class="muted small" style="margin: 2px 0 10px">Bookings by slot start time</p>
+        <div class="bars" id="hours"></div>
+      </div>
+      <div class="card">
+        <h3>Machines</h3>
+        <div class="table-wrap" id="machines" style="margin-top: 8px"></div>
+      </div>
+      <div class="card">
+        <h3>Laundry rooms</h3>
+        <div class="table-wrap" id="rooms" style="margin-top: 8px"></div>
+        <h3 style="margin-top: 18px">Open issues</h3>
+        <div id="issues" style="margin-top: 8px"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    function stat(value, label, href) {
+      return `<a class="stat" ${href ? `href="${href}"` : ''} style="text-decoration: none; color: inherit">
+        <div class="value">${value}</div><div class="label">${label}</div></a>`;
+    }
+    function bars(rows, labelOf, valueOf, extraOf = () => '') {
+      if (!rows.length) return '<p class="muted">No bookings yet.</p>';
+      const max = Math.max(...rows.map(valueOf), 1);
+      return rows.map((r) => `
+        <div class="bar-row"><span>${labelOf(r)}</span>
+          <div class="bar"><span style="width: ${(100 * valueOf(r)) / max}%"></span></div>
+          <span class="muted">${valueOf(r)}${extraOf(r)}</span></div>`).join('');
+    }
+
+    async function load() {
+      const days = document.getElementById('days').value;
+      document.getElementById('days-label').textContent = `${days} days`;
+      try {
+        const s = await api(`/api/stats?days=${days}`);
+        const t = s.today;
+        const p = s.period;
+        document.getElementById('now').innerHTML = [
+          stat(t.bookings_today, 'bookings today', `admin-bookings.html?from=${todayInput()}&to=${todayInput()}`),
+          stat(t.running_now, 'machines running now'),
+          stat(t.waiting_collection, 'loads waiting to be collected'),
+          stat(`${t.out_of_order}/${t.machines}`, 'machines out of order', 'machines.html'),
+          stat(t.open_issues, `open issues (${t.open_feedback} open feedback)`, 'feedback.html?status=open'),
+          stat(t.waiting_students, 'students on waiting lists'),
+        ].join('');
+        document.getElementById('period').innerHTML = [
+          stat(p.bookings || 0, 'bookings'),
+          stat(p.washes || 0, 'loads washed or dried'),
+          stat(p.cancelled || 0, 'cancelled'),
+          stat(p.no_show_rate !== null ? `${p.no_show_rate}%` : '–', `no-shows (${p.no_shows || 0})`),
+          stat(p.avg_rating !== null ? `${p.avg_rating} ★` : '–', 'average rating'),
+          stat(t.students, 'active students', 'admin.html'),
+        ].join('');
+        document.getElementById('per-day').innerHTML = bars(s.perDay,
+          (r) => `${r.day === todayInput() ? '<strong>Today</strong>' : formatDay(r.day)}`, (r) => Number(r.booked),
+          (r) => (r.no_shows > 0 ? ` <span title="no-shows" style="color: var(--bad)">(${r.no_shows} missed)</span>` : ''));
+        document.getElementById('hours').innerHTML = bars(s.busiestHours, (r) => `${String(r.hour).padStart(2, '0')}:00`, (r) => r.bookings);
+        document.getElementById('machines').innerHTML = s.machines.length ? `<table>
+          <tr><th>Machine</th><th>Room</th><th>Loads</th><th>Missed</th><th>Rating</th></tr>
+          ${s.machines.map((m) => `<tr><td>${kindBadge(m.kind)} <strong>${esc(m.code)}</strong>${m.out_of_order ? ' <span class="badge s-out">Out of order</span>' : ''}</td>
+            <td>${esc(m.room)}</td><td>${m.washes || 0}</td><td>${m.no_shows || 0}</td><td>${m.avg_rating ? `${m.avg_rating} ★` : '–'}</td></tr>`).join('')}
+        </table>` : '<p class="muted">No machines yet. <a href="machines.html">Add them</a>.</p>';
+        document.getElementById('rooms').innerHTML = s.rooms.length ? `<table>
+          <tr><th>Room</th><th>Bookings</th><th>Rating</th><th>Open issues</th></tr>
+          ${s.rooms.map((r) => `<tr><td><strong>${esc(r.name)}</strong></td><td>${r.bookings}</td><td>${r.avg_rating ? `${r.avg_rating} ★` : '–'}</td><td>${r.open_issues}</td></tr>`).join('')}
+        </table>` : '<p class="muted">No laundry rooms yet. <a href="machines.html">Add them</a>.</p>';
+        document.getElementById('issues').innerHTML = s.recentIssues.length ? s.recentIssues.map((f) => `
+          <div style="margin-bottom: 8px"><a href="feedback.html">${esc(f.room || 'General')}${f.machine_code ? ` · ${esc(f.machine_code)}` : ''}</a>
+            <span class="muted small">· ${timeAgo(f.created_at)}</span><div class="small">${esc((f.comment || '').slice(0, 120))}</div></div>`).join('')
+          : '<p class="muted">No open issues. 🎉</p>';
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    document.getElementById('days').onchange = load;
+    requireUser('admin').then(() => { load(); setInterval(load, 60000); });
+  </script>
+</body>
+</html>

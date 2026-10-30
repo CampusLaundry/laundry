@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Laundry tips</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main class="narrow">
+    <div class="page-head">
+      <div>
+        <h1>Laundry tips</h1>
+        <p class="muted" style="margin: 0">Clean clothes, longer-lasting fabrics and happy machines.</p>
+      </div>
+      <button class="hidden" id="new-tip">+ New tip</button>
+    </div>
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <form class="card hidden" id="tip-form">
+      <h2 style="margin-top: 0" id="form-title">New tip</h2>
+      <div class="grid-2">
+        <div><label for="f-category">Category</label><select id="f-category"></select></div>
+        <div><label class="inline" style="margin-top: 36px"><input type="checkbox" id="f-published" checked> Published</label></div>
+      </div>
+      <label for="f-title">Title</label>
+      <input type="text" id="f-title" required maxlength="150">
+      <label for="f-body">Tip</label>
+      <textarea id="f-body" rows="5" required maxlength="5000"></textarea>
+      <p class="error" id="form-error"></p>
+      <div class="row" style="margin-top: 8px">
+        <button type="submit">Save tip</button>
+        <button type="button" class="secondary" id="f-cancel">Cancel</button>
+      </div>
+    </form>
+
+    <div class="tabs" id="tabs"></div>
+    <div id="tips"></div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let user;
+    let tips = [];
+    let category = '';
+    let editingId = null;
+    const ICON = { sorting: '🧦', detergents: '🧴', fabrics: '👕', maintenance: '🔧' };
+    const form = document.getElementById('tip-form');
+
+    function renderTabs() {
+      document.getElementById('tabs').innerHTML = [['', 'All tips'], ...Object.entries(TIP_CATEGORY)].map(([k, label]) =>
+        `<button data-cat="${k}" class="${k === category ? 'active' : ''}">${k ? ICON[k] + ' ' : ''}${label}</button>`).join('');
+    }
+
+    function render() {
+      const list = tips.filter((t) => !category || t.category === category);
+      document.getElementById('tips').innerHTML = list.length ? list.map((t) => `
+        <div class="card tip" data-id="${t.id}">
+          <div class="spread">
+            <div class="row"><span class="badge">${ICON[t.category]} ${TIP_CATEGORY[t.category]}</span>${t.is_published ? '' : '<span class="badge s-cancelled">Draft</span>'}</div>
+            ${user.role === 'admin' ? '<div class="row"><button class="small secondary" data-edit>Edit</button><button class="small danger" data-delete>Delete</button></div>' : ''}
+          </div>
+          <h3 style="margin-top: 8px">${esc(t.title)}</h3>
+          <p class="text">${esc(t.body)}</p>
+        </div>`).join('') : '<div class="card empty">No tips in this category yet.</div>';
+    }
+
+    async function load() {
+      tips = await api('/api/tips');
+      renderTabs();
+      render();
+    }
+
+    function openForm(t) {
+      editingId = t ? t.id : null;
+      document.getElementById('form-title').textContent = t ? 'Edit tip' : 'New tip';
+      document.getElementById('f-category').value = t ? t.category : (category || 'sorting');
+      document.getElementById('f-title').value = t ? t.title : '';
+      document.getElementById('f-body').value = t ? t.body : '';
+      document.getElementById('f-published').checked = t ? t.is_published : true;
+      document.getElementById('form-error').textContent = '';
+      form.classList.remove('hidden');
+      form.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    document.getElementById('tabs').onclick = (e) => {
+      const b = e.target.closest('[data-cat]');
+      if (!b) return;
+      category = b.dataset.cat;
+      renderTabs();
+      render();
+    };
+    document.getElementById('new-tip').onclick = () => openForm(null);
+    document.getElementById('f-cancel').onclick = () => form.classList.add('hidden');
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const body = {
+        category: document.getElementById('f-category').value,
+        title: document.getElementById('f-title').value,
+        body: document.getElementById('f-body').value,
+        isPublished: document.getElementById('f-published').checked,
+      };
+      try {
+        await api(editingId ? `/api/tips/${editingId}` : '/api/tips', { method: editingId ? 'PUT' : 'POST', body });
+        form.classList.add('hidden');
+        flash('Tip saved.');
+        await load();
+      } catch (err) {
+        document.getElementById('form-error').textContent = err.message;
+      }
+    };
+    document.getElementById('tips').addEventListener('click', async (e) => {
+      const card = e.target.closest('[data-id]');
+      if (!card) return;
+      const t = tips.find((x) => x.id === Number(card.dataset.id));
+      if (e.target.matches('[data-edit]')) openForm(t);
+      if (e.target.matches('[data-delete]')) {
+        if (!confirm(`Delete the tip "${t.title}"?`)) return;
+        await api(`/api/tips/${t.id}`, { method: 'DELETE' });
+        await load();
+      }
+    });
+
+    requireUser().then(async (u) => {
+      user = u;
+      if (user.role === 'admin') {
+        document.getElementById('new-tip').classList.remove('hidden');
+        document.getElementById('f-category').innerHTML = Object.entries(TIP_CATEGORY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+      }
+      category = Object.keys(TIP_CATEGORY).includes(param('category')) ? param('category') : '';
+      try { await load(); } catch (err) { document.getElementById('error').textContent = err.message; }
+    });
+  </script>
+</body>
+</html>

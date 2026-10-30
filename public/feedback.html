@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · Feedback</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main class="narrow">
+    <h1 id="page-title">Feedback</h1>
+    <p class="muted" id="intro">Rate the service or a machine, leave a comment, or report a problem. The laundry administrator reads every message.</p>
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <!-- Students: give feedback -->
+    <form class="card hidden" id="feedback-form">
+      <div class="tabs" id="kinds" style="margin: -6px 0 6px">
+        <button type="button" data-kind="rating" class="active">⭐ Rate</button>
+        <button type="button" data-kind="comment">💬 Comment</button>
+        <button type="button" data-kind="issue">⚠️ Report an issue</button>
+      </div>
+      <div class="grid-2">
+        <div><label for="f-room">Laundry room</label><select id="f-room"></select></div>
+        <div><label for="f-machine">Machine <span class="muted small">(optional)</span></label><select id="f-machine"></select></div>
+      </div>
+      <div id="rating-row">
+        <label>Your rating</label>
+        <div class="star-input" id="stars"></div>
+      </div>
+      <label for="f-comment" id="comment-label">Comment <span class="muted small">(optional)</span></label>
+      <textarea id="f-comment" rows="3" maxlength="2000"></textarea>
+      <p class="error" id="form-error"></p>
+      <button type="submit" style="margin-top: 8px">Send feedback</button>
+    </form>
+
+    <!-- Admin: filters -->
+    <div class="card row hidden" id="filters">
+      <select id="status" style="flex: 1; min-width: 150px">
+        <option value="open">Open (new or in progress)</option><option value="">All</option>
+        <option value="new">New</option><option value="in_progress">Being looked at</option>
+        <option value="resolved">Resolved</option><option value="dismissed">Closed</option>
+      </select>
+      <select id="kind" style="flex: 1; min-width: 130px">
+        <option value="">All types</option><option value="issue">Issues</option><option value="rating">Ratings</option><option value="comment">Comments</option>
+      </select>
+      <select id="room-filter" style="flex: 1; min-width: 150px"></select>
+    </div>
+
+    <h2 id="list-title">My feedback</h2>
+    <div id="list"></div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let user;
+    let rooms = [];
+    let machines = [];
+    let items = [];
+    let kind = 'rating';
+    let rating = 0;
+
+    function renderStars() {
+      document.getElementById('stars').innerHTML = [1, 2, 3, 4, 5].map((n) =>
+        `<button type="button" data-star="${n}" class="${n <= rating ? 'on' : ''}" aria-label="${n} star${n === 1 ? '' : 's'}">★</button>`).join('');
+    }
+    function setKind(k) {
+      kind = k;
+      document.querySelectorAll('[data-kind]').forEach((b) => b.classList.toggle('active', b.dataset.kind === k));
+      document.getElementById('rating-row').classList.toggle('hidden', k !== 'rating');
+      document.getElementById('comment-label').innerHTML = { rating: 'Comment <span class="muted small">(optional)</span>', comment: 'Your comment', issue: 'What is wrong?' }[k];
+      document.getElementById('f-comment').placeholder = k === 'issue' ? 'e.g. Washer W2 leaks water from the door and stops with error E21.' : '';
+    }
+    function fillMachines() {
+      const roomId = Number(document.getElementById('f-room').value);
+      document.getElementById('f-machine').innerHTML = optionsHtml(machines.filter((m) => m.room_id === roomId), null, roomId ? 'The room in general' : 'Choose a room first',
+        (m) => `${m.kind === 'washer' ? 'Washer' : 'Dryer'} ${m.code}`);
+    }
+
+    function feedbackCard(f) {
+      const admin = user.role === 'admin';
+      const where = [f.room, f.machine_code && `${f.machine_kind} ${f.machine_code}`].filter(Boolean).map(esc).join(' · ');
+      return `<div class="card" data-id="${f.id}">
+        <div class="spread">
+          <div class="row">${kindBadge(f.kind)}${feedbackBadge(f.status)}${f.rating ? stars(f.rating) : ''}
+            ${f.machine_out_of_order ? '<span class="badge s-out">Machine out of order</span>' : ''}</div>
+          <span class="muted small">${formatDate(f.created_at)}</span>
+        </div>
+        <div class="meta small" style="margin-top: 6px">${admin ? `${esc(f.student || 'A former student')}${f.student_number ? ` (${esc(f.student_number)})` : ''} · ` : ''}${where || 'General'}</div>
+        ${f.comment ? `<p class="description" style="margin: 6px 0 0">${esc(f.comment)}</p>` : ''}
+        ${f.admin_response ? `<div class="response"><strong>Reply${f.responded_by_name ? ` from ${esc(f.responded_by_name)}` : ''}:</strong> ${esc(f.admin_response)}</div>` : ''}
+        ${admin ? `<div class="grid-2" style="margin-top: 10px; align-items: end">
+            <div><label>Reply to the student</label><textarea rows="2" data-response maxlength="2000">${esc(f.admin_response || '')}</textarea></div>
+            <div><label>Status</label><select data-status>${Object.entries(FEEDBACK_STATUS).map(([k, v]) => `<option value="${k}" ${k === f.status ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+          </div>
+          <div class="row" style="margin-top: 8px">
+            <button class="small" data-save>Save</button>
+            ${f.kind === 'issue' && f.machine_id && !f.machine_out_of_order ? '<button class="small danger" data-outage>Mark machine out of order</button>' : ''}
+            <button class="small secondary" data-delete>Delete</button>
+          </div>` : ''}
+      </div>`;
+    }
+
+    async function load() {
+      const q = new URLSearchParams();
+      if (user.role === 'admin') {
+        if (document.getElementById('status').value) q.set('status', document.getElementById('status').value);
+        if (document.getElementById('kind').value) q.set('kind', document.getElementById('kind').value);
+        if (document.getElementById('room-filter').value) q.set('roomId', document.getElementById('room-filter').value);
+      }
+      items = await api(`/api/feedback?${q}`);
+      document.getElementById('list').innerHTML = items.length ? items.map(feedbackCard).join('')
+        : `<div class="card empty">${user.role === 'admin' ? 'No feedback matches.' : 'You haven\'t sent any feedback yet.'}</div>`;
+    }
+
+    document.getElementById('kinds').onclick = (e) => { const b = e.target.closest('[data-kind]'); if (b) setKind(b.dataset.kind); };
+    document.getElementById('stars').onclick = (e) => { const b = e.target.closest('[data-star]'); if (b) { rating = Number(b.dataset.star); renderStars(); } };
+    document.getElementById('f-room').onchange = fillMachines;
+    document.getElementById('feedback-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('form-error');
+      errorEl.textContent = '';
+      if (kind === 'rating' && !rating) { errorEl.textContent = 'Choose 1 to 5 stars.'; return; }
+      try {
+        await api('/api/feedback', { method: 'POST', body: {
+          kind, rating: kind === 'rating' ? rating : undefined,
+          comment: document.getElementById('f-comment').value,
+          roomId: document.getElementById('f-room').value || null,
+          machineId: document.getElementById('f-machine').value || null,
+        } });
+        document.getElementById('f-comment').value = '';
+        rating = 0;
+        renderStars();
+        flash(kind === 'issue' ? 'Thank you, the issue has been reported. You\'ll be notified when the administrator replies.' : 'Thank you for your feedback!');
+        await load();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    };
+
+    for (const id of ['status', 'kind', 'room-filter']) document.getElementById(id).onchange = load;
+    document.getElementById('list').addEventListener('click', async (e) => {
+      const card = e.target.closest('[data-id]');
+      if (!card) return;
+      const f = items.find((x) => x.id === Number(card.dataset.id));
+      document.getElementById('error').textContent = '';
+      try {
+        if (e.target.matches('[data-save]')) {
+          await api(`/api/feedback/${f.id}`, { method: 'PATCH', body: {
+            status: card.querySelector('[data-status]').value, response: card.querySelector('[data-response]').value,
+          } });
+          flash('Saved. The student has been notified.');
+        }
+        if (e.target.matches('[data-outage]')) {
+          const reason = prompt('Reason shown to students:', (f.comment || 'Reported faulty').slice(0, 200));
+          if (!reason) return;
+          const { cancelled } = await api(`/api/machines/${f.machine_id}/outage`, { method: 'POST', body: { reason } });
+          await api(`/api/feedback/${f.id}`, { method: 'PATCH', body: { status: 'in_progress' } });
+          flash(`${f.machine_code} is now out of order. ${cancelled} upcoming booking${cancelled === 1 ? ' was' : 's were'} cancelled and the students notified.`);
+        }
+        if (e.target.matches('[data-delete]')) {
+          if (!confirm('Delete this feedback?')) return;
+          await api(`/api/feedback/${f.id}`, { method: 'DELETE' });
+        }
+        await load();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    });
+
+    async function init() {
+      user = await requireUser();
+      rooms = await api('/api/rooms');
+      if (user.role === 'admin') {
+        document.getElementById('page-title').textContent = 'Feedback and issues';
+        document.getElementById('intro').textContent = 'Reply to students, close feedback, and take machines out of service when an issue is reported.';
+        document.getElementById('filters').classList.remove('hidden');
+        document.getElementById('list-title').classList.add('hidden');
+        document.getElementById('room-filter').innerHTML = optionsHtml(rooms, null, 'All rooms');
+      } else {
+        machines = await api('/api/machines');
+        document.getElementById('feedback-form').classList.remove('hidden');
+        document.getElementById('f-room').innerHTML = optionsHtml(rooms, user.roomId, 'Choose a laundry room…');
+        fillMachines();
+        renderStars();
+        setKind(param('kind') || 'rating');
+      }
+      try { await load(); } catch (err) { document.getElementById('error').textContent = err.message; }
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Laundry · My laundry</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div class="inner"></div></header>
+  <main class="narrow">
+    <div class="page-head">
+      <div>
+        <h1>My laundry</h1>
+        <p class="muted" style="margin: 0">Tap <strong>Start cycle</strong> when you load the machine. We'll notify you when it's done.</p>
+      </div>
+      <a class="button accent" href="book.html">+ Book a machine</a>
+    </div>
+    <div id="banner"></div>
+    <p class="error" id="error"></p>
+
+    <div id="upcoming"><p class="muted">Loading…</p></div>
+
+    <div id="waitlist-section" class="hidden">
+      <h2>Waiting list</h2>
+      <div id="waitlist"></div>
+    </div>
+
+    <h2>History</h2>
+    <div class="card table-wrap" id="history"></div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script>
+    let bookings = [];
+    let reloadPending = false;
+
+    // "today", "tomorrow" or "on Fri, 3 Oct" for use inside a sentence.
+    function relativeDay(d) {
+      const label = dayLabel(d);
+      return label === 'Today' || label === 'Tomorrow' ? label.toLowerCase() : `on ${label}`;
+    }
+
+    function bookingCard(b) {
+      const a = b.actions;
+      const start = new Date(b.starts_at);
+      let detail;
+      if (b.status === 'booked') {
+        const mins = Math.round((start - Date.now()) / 60000);
+        detail = a.start ? '<strong>Your slot is open: load the machine and tap Start cycle.</strong>'
+          : mins > 0 ? `Starts ${mins < 60 ? `in ${mins} minute${mins === 1 ? '' : 's'}` : `${relativeDay(b.booking_date)} at ${hhmm(b.slot_start)}`}.`
+            : 'Your slot has started. Start the cycle within 15 minutes or it will be released.';
+      } else if (b.status === 'in_progress') {
+        detail = `<div class="progress"><span data-progress="${b.id}"></span></div><span class="small" data-left="${b.id}"></span>`;
+      } else if (b.status === 'done') {
+        detail = `<strong style="color: var(--accent)">Your laundry is done${b.finishes_at ? ` (since ${hhmm(new Date(b.finishes_at).toTimeString())})` : ''}. Please collect it${a.late ? ' — the next student is waiting' : ''}.</strong>`;
+      }
+      return `<div class="card booking" data-id="${b.id}">
+        <div class="when"><div class="d">${dayLabel(b.booking_date)}</div><div class="t">${hhmm(b.slot_start)}</div><div class="d">to ${hhmm(b.slot_end)}</div></div>
+        <div class="body">
+          <div class="row">${bookingBadge(b.status)}${kindBadge(b.kind)}</div>
+          <div class="item-title" style="font-size: 17px; font-weight: 600; margin: 4px 0 2px">${b.kind === 'washer' ? 'Washer' : 'Dryer'} ${esc(b.code)} · ${esc(b.room)}</div>
+          <div class="meta small">${b.location ? esc(b.location) + ' · ' : ''}${b.cycle_minutes}-minute cycle</div>
+          <div style="margin-top: 6px">${detail}</div>
+        </div>
+        <div class="actions">
+          ${a.start ? '<button class="accent" data-act="start">▶ Start cycle</button>' : ''}
+          ${a.collect ? '<button class="accent" data-act="collect">✓ Collected</button>' : ''}
+          ${a.reschedule ? `<a class="button small secondary" href="book.html?reschedule=${b.id}">Reschedule</a>` : ''}
+          ${a.cancel ? '<button class="small danger" data-act="cancel">Cancel</button>' : ''}
+        </div>
+      </div>`;
+    }
+
+    // Live countdown for running cycles.
+    function tickProgress() {
+      for (const b of bookings.filter((x) => x.status === 'in_progress')) {
+        const started = new Date(b.started_at).getTime();
+        const ends = new Date(b.finishes_at).getTime();
+        const pct = Math.min(100, Math.max(0, ((Date.now() - started) / (ends - started)) * 100));
+        const bar = document.querySelector(`[data-progress="${b.id}"]`);
+        const left = document.querySelector(`[data-left="${b.id}"]`);
+        if (!bar) continue;
+        bar.style.width = `${pct}%`;
+        const mins = Math.max(0, Math.ceil((ends - Date.now()) / 60000));
+        left.textContent = mins > 0 ? `About ${mins} minute${mins === 1 ? '' : 's'} left · finishes at ${hhmm(new Date(ends).toTimeString())}` : 'Finishing…';
+        // The server marks it done; reload once to show that.
+        if (Date.now() > ends + 3000 && !reloadPending) {
+          reloadPending = true;
+          setTimeout(() => { reloadPending = false; load(); }, 2500);
+        }
+      }
+    }
+
+    async function load() {
+      try {
+        const [upcoming, past, waitlist] = await Promise.all([
+          api('/api/bookings'), api('/api/bookings?view=history'), api('/api/waitlist'),
+        ]);
+        bookings = upcoming;
+        document.getElementById('upcoming').innerHTML = upcoming.length ? upcoming.map(bookingCard).join('')
+          : '<div class="card empty">You have no bookings. <a href="book.html">Book a washer or dryer</a>.</div>';
+        document.getElementById('waitlist-section').classList.toggle('hidden', !waitlist.length);
+        document.getElementById('waitlist').innerHTML = waitlist.map((w) => `
+          <div class="card spread" data-wait="${w.id}">
+            <div><strong>${w.kind === 'washer' ? 'Washer' : 'Dryer'} in ${esc(w.room)}</strong> · ${dayLabel(w.wait_date)}
+              <div class="muted small">${w.notified_at ? `You were notified ${timeAgo(w.notified_at)} that one became free.` : w.ahead ? `${w.ahead} student${w.ahead === 1 ? '' : 's'} ahead of you` : 'You are first in line'}</div></div>
+            <div class="row"><a class="button small secondary" href="book.html?room=${w.room_id}&date=${w.wait_date}">View slots</a>
+              <button class="small danger" data-leave>Leave</button></div>
+          </div>`).join('');
+        document.getElementById('history').innerHTML = past.length ? `<table>
+          <tr><th>Date</th><th>Machine</th><th>Room</th><th>Status</th><th>Started</th><th>Collected</th></tr>
+          ${past.map((b) => `<tr>
+            <td>${formatDay(b.booking_date)} ${hhmm(b.slot_start)}</td><td>${kindBadge(b.kind)} ${esc(b.code)}</td><td>${esc(b.room)}</td>
+            <td>${bookingBadge(b.status)}</td><td class="small">${b.started_at ? hhmm(new Date(b.started_at).toTimeString()) : '–'}</td>
+            <td class="small">${b.collected_at ? hhmm(new Date(b.collected_at).toTimeString()) : '–'}</td></tr>`).join('')}
+        </table>` : '<p class="empty">No past bookings yet.</p>';
+        tickProgress();
+        refreshBell();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    document.getElementById('upcoming').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      const id = b.closest('[data-id]').dataset.id;
+      const act = b.dataset.act;
+      document.getElementById('error').textContent = '';
+      try {
+        if (act === 'cancel' && !confirm('Cancel this booking? The slot becomes free for other students.')) return;
+        await api(`/api/bookings/${id}/${act}`, { method: 'POST' });
+        flash({ start: 'Cycle started. We\'ll notify you when it\'s done.', collect: 'Thanks for collecting promptly! The machine is free for the next student.', cancel: 'Booking cancelled.' }[act]);
+        await load();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    });
+
+    document.getElementById('waitlist').addEventListener('click', async (e) => {
+      if (!e.target.matches('[data-leave]')) return;
+      await api(`/api/waitlist/${e.target.closest('[data-wait]').dataset.wait}`, { method: 'DELETE' });
+      await load();
+    });
+
+    requireUser().then(() => {
+      if (param('booked')) flash('Booked! You\'ll get a reminder 30 minutes before your slot.');
+      if (param('moved')) flash('Your booking was moved.');
+      load();
+      setInterval(tickProgress, 1000);
+      setInterval(load, 30000);
+    });
+  </script>
+</body>
+</html>
